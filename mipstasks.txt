@@ -1,0 +1,246 @@
+;--------------------------------------------------------------------------
+; Program begin at symbol main
+; Computes statistics (infinity norm, average, power) about a sampled data signal, 
+; and prints the results to stdout.
+;--------------------------------------------------------------------------
+               .data       ; start of data space
+
+length:        .word32 16  ; number of elements in sampled data signal, a 32-bit integer.
+
+                           ; the sampled data signal; each element is a 32-bit floating-point double.
+signal:        .double 10.5,  5.6, -1.05, 0.4,   3.1, -257.2,  7.8,  8.9,  9.7, 10.6, 13.4, 14.0, 0.0, 0.01, 888.8, -967.2
+
+;  Blocks needed to support system calls to the printf function.
+scaling:       .double 10000000  ; scaling factor needed for floating-point print code.
+         
+printfstring0: .asciiz "The infinity norm is %d.%d.\n\n"
+printfparams0: .space  8    ; space to store pointer to printfstring0.
+infnormint:    .word64 0    ; for use by the floating-point print code. 
+infnormfract:  .word64 0    ; for use by the floating-point print code.
+infinitynorm:  	.double 0.0  ; space to store the infinity norm as a floating-point double.                              
+
+printfstring1: .asciiz "The average is %d.%d.\n\n"
+printfparams1: .space  8    ; space to store pointer to printfstring1.
+averageint:    .word64 0    ; for use by the floating-point print code. 
+averagefract:  .word64 0    ; for use by the floating-point print code.
+average:       .double 0.0  ; place to store the average as a floating-point double.
+
+
+printfstring2: .asciiz "The power is %d.%d.\n\n"
+printfparams2: .space  8    ; space to store pointer to printfstring2.
+powerint:      .word64 0    ; for use by the floating-point print code. 
+powerfract:    .word64 0    ; for use by the floating-point print code.
+power:         .double 0.0  ; space to store the power norm as a floating-point double.  
+
+
+
+               .text        ; start of code space
+main:   
+
+               ; Put the number of samples in the signal in the GPR r1.
+               daddi r2, r0, length           ; r2 has pointer to length in memory.
+               lw r1, 0(r2)                   ; load 32-bit word using pointer in r2
+					      ; sets r1 to 16
+;------------------------------------------------------------------------------------------------------------
+	; initialize registers to hold initial zero values if not in use, label registers used
+
+		; register r1 holds value of signals 
+		; register r2 holds pointer to memory of signals
+	; FLOATING POINT REGISTERS		
+		dmtc1 r0, f3             ; holds current value of signal   
+            cvt.d.l f3, f3
+		dmtc1 r0, f4             ; holds infinity norm	
+            cvt.d.l f4, f4  
+		dmtc1 r0, f5             ; holds copy of total numbers of signals in array 
+            cvt.d.l f5, f5                 
+		dmtc1 r0, f7             ; holds quotient and then average of numbers   
+            cvt.d.l f7, f7
+		dmtc1 r0, f8             ; holds sum of all values (used in AVERAGE)  
+            cvt.d.l f8, f8  
+		dmtc1 r0, f9             ; holds power of signals
+            cvt.d.l f9, f9  
+
+
+	; NOT FLOATING POINT
+		; #6		; used for holding 1 or 0 for slt 		
+		addi r11, r0, 0		; used for address of signal	
+;------------------------------------------------------------------------------------------------------------
+					; INFINITY NORM
+;------------------------------------------------------------------------------------------------------------
+	; loop through all 16 numbers and check for infinity norm	
+loop:
+		beqz r1, re_init	; if we have traversed through all signals, go to next step
+		l.d f3, signal(r11)	; loads next signal into r3	
+	
+					; Get absolute value of signal in r3
+             c.lt.d 6, f0, f3    	; sets r6 to 1 if r0 < r3 (r6 = 0 if r3 is negative)
+             BC1F 6, make_pos 	; if is positive, skip make_pos loop
+		j is_biggest		; go to branch if r3 is already positive
+
+;------------------------------------------------------------------------------------------------------------
+	; make a negative number positive (make contents of r3 positive)
+make_pos:
+		sub.d f3, f0, f3 	; r3 = 0 - r3
+		j is_biggest		; now check if r3 is bigger than other signals
+;------------------------------------------------------------------------------------------------------------
+
+is_biggest:
+	       ; replacing register with new infinity norm if bigger
+		c.lt.d 6, f3, f4 		; if r3 < r4, r6 = 1, if r6 = 0 we must update infinity_norm
+		BC1T 6, next_signal	; must update infinity_norm
+		add.d f4, f3, f0		; load r3 into r4 to update infinity norm
+;------------------------------------------------------------------------------------------------------------
+	; updates relevant counters to move through the signal collection
+next_signal:
+		addi r11, r11, 8	; go to address of next signal (PC + 8)
+		addi r1, r1, -1	; subtract 1 from r1 
+		j loop			; jump to loop for checking that next signal		
+;------------------------------------------------------------------------------------------------------------
+					; AVERAGE
+;------------------------------------------------------------------------------------------------------------
+	; re-initialize the array and variables
+re_init:
+ 		daddi r2, r0, length    ; r2 has pointer to length in memory.
+            ld r1, 0(r2)             ; load 32-bit word using pointer in r2
+						; now r1 contains value of 16
+		addi r11, r0, 0		; initialize register to hold zero value
+		addi r5, r1, 0		; copy value of r1 to r5 so we know what to divide total sum by  
+		j average			; jump to the averaging part of the program!
+;------------------------------------------------------------------------------------------------------------
+	; add up all numbers of signals
+average:
+		beqz r1, divide		; if we're done looping through array, go to next step
+		l.d f3, signal(r11)		; load next value of signal into r3
+		add.d f8, f3, f3 		; add current signal to total signal amount
+ 		addi r11, r11, 8		; increment r11 to read next value from signal
+		daddi r1, r1, -1		; decrement r1 by 1 so we know when to stop looping	
+		bnez r1, average		; if we haven't added each signal, continue looping
+;------------------------------------------------------------------------------------------------------------
+	; take the sum of all the signals and divide to find average
+divide:
+		div.d f7,f8,f5		; divide total sum by number of signals
+		j re_re_init			; then we can jump to the power of the signal part of the program
+
+;------------------------------------------------------------------------------------------------------------
+					; POWER OF SIGNAL
+;------------------------------------------------------------------------------------------------------------
+	; re initialize the loop variables to re-iterate through the loop!
+re_re_init: 
+		daddi r2, r0, length  	; r2 has pointer to length in memory.
+            ld r1, 0(r2)            ; load 32-bit word using pointer in r2
+						; now r1 contains value of 16
+		addi r11, r0, 0		; initialize register to hold zero value to iterate through array 
+;------------------------------------------------------------------------------------------------------------
+	; time to iterate through every value in the signal, square them and add em all up
+power_hour:
+		beqz r1, over			; if r1 = 0, then leave the loop
+		l.d f3, signal(r11)		; load next value of signal into f3
+		mul.d f3, f3, f3			; multiply the register by itself that holds signal
+		add.d f9, f9, f3			; add the powered signal to total sum
+		daddi r1, r1, -1		; decrease loop number
+		addi r11, r11, 8		; go to next signal in array ( PC + 8)
+		j power_hour 			; repeat loop until all values powered and added to sum
+		
+;------------------------------------------------------------------------------------------------------------
+               ;
+               ; USE THIS CODE TO PRINT ALL THREE RESULTS.
+               ;
+               ; Uncomment these lines and replace ?s with the numbers of the floating-point
+               ; registers that hold your results, to write them into memory at the 
+               ; designated locations.
+over:          s.d f4, infinitynorm(r0)
+               s.d f7, average(r0)
+               s.d f9, power(r0)
+              
+               ; print infinity norm
+               daddi r5, r0, printfstring0    ; r5 now holds pointer to string to print
+               sd r5, printfparams0(r0)       ; put pointer first in parameters section 
+               daddi r14, r0, printfparams0   ; DOUBLEPRINT expects address of printf parameters in r14.
+               daddi r13, r0, infinitynorm    ; DOUBLEPRINT expects address of double to print in r13.
+               jal doubleprint;
+ 
+               ; print average
+               daddi r5, r0, printfstring1    ; r5 now holds pointer to string to print
+               sd r5, printfparams1(r0)       ; put pointer first in parameters section 
+               daddi r14, r0, printfparams1   ; DOUBLEPRINT expects address of printf parameters in r14.
+               daddi r13, r0, average         ; DOUBLEPRINT expects address of double to print in r13.
+               jal doubleprint;
+
+               ; print power
+               daddi r5, r0, printfstring2    ; r5 now holds pointer to string to print
+               sd r5, printfparams2(r0)       ; put pointer first in parameters section 
+               daddi r14, r0, printfparams2   ; DOUBLEPRINT expects address of printf parameters in r14.
+               daddi r13, r0, power           ; DOUBLEPRINT expects address of double to print in r13.
+               jal doubleprint;
+
+               ; stop execution.
+               syscall 0 
+
+
+               ; DOUBLEPRINT function
+               ; 
+               ; Prints a floating-point double that is stored in memory. 
+               ;
+               ; It is a kludge to work around the fact that the EDUMIPS simulator
+               ; does not support printf of doubles; it also works around some bugs
+               ; in the simulator.  It will not work
+               ; for extremely large or extremely small floating-point doubles.
+               ; It prints the integer portion of the number, and the first seven digits
+               ; of the fractional part.  (It does not round.)
+               ; 
+               ; To use:
+               ; Put memory address of floating point double to be printed in r13.
+               ; Put address of printf parameter block in r14.
+               ; Then, call this function using "jal doubleprint".
+               ;
+               ; Make sure that your code does not have any important data stored in:
+               ; 
+               ; r31 -- needed here for return address.
+               ; r29, r30, f29, f30 -- used by this code
+               ; 
+
+doubleprint:   l.d f30, 0(r13)                ; load double to be printed from memory into f30.
+               cvt.l.d f29, f30               ; convert contents of f30 from double fp to long int in f29,
+                                              ; throwing away the fractional part.
+               dmfc1 r30, f29                 ; copy bits of integer part from f29 into r30.
+               daddi r29, r13, -16
+               sd r30, 0(r29)                 ; store integer part of double in memory as print parameter.
+
+               bgez r30, positivefp           ; working around a bug in cvt.d.l,
+                                              ; which works only for positive numbers.
+                                              ; (will use magnitude of integer part of fp value to print).
+
+negativefp:    dsub r30, r0, r30              ; if fp value is negative, get its magnitude.
+               dmtc1 r30, f29                 ; copy bits of integer magn of value from r30 into f29. 
+               cvt.d.l f29, f29               ; convert integer magn from long int to fp double.  
+               add.d f29, f30, f29            ; add magnitude of value to value,
+                                              ; leaving only the fractional part of value in f29.
+               j scalefp
+
+positivefp:    dmtc1 r30, f29                 ; if fp value is positive, copy bits of integer part from r30 into f29.
+               cvt.d.l f29, f29               ; convert integer part back from long int to fp double.
+               sub.d f29, f30, f29            ; subtract integer part from fp value, 
+                                              ; leaving only the fractional part of fp value in f29.
+
+scalefp:       l.d f30, scaling(r0)           ; f29 has 1e7.
+               nop                            ; these NOPs work around a simulator bug that involves structural hazards.
+               nop
+               mul.d f29, f29, f30            ; multiply fractional part by scaling so that top seven fraction 
+                                              ; digits become integer digits.
+               cvt.l.d f29, f29               ; convert contents of f29 from double fp to long int, resulting  
+                                              ; in an integer that contains first seven digits of the fractional 
+                                              ; part of fp value.
+               dmfc1 r30, f29                 ; copy fractional part from f29 into r30.
+               bgez r30, overfp               ; if fractional part is positive, proceed directly to printing.
+               dsub r30, r0, r30              ; otherwise, make it positive by finding its magnitude.
+overfp:        daddi r29, r13, -8
+               sd r30, 0(r29)                 ; store fractional part of double in memory as print parameter.
+
+               syscall 5                      ; print using printf function.
+               jr r31                         ; return to main code.
+
+
+
+
+
+                   
